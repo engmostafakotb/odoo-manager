@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>نظام إدارة مشاريع أودو | Odoo Project Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Firebase Libraries -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, doc, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+        window.fb = { initializeApp, getFirestore, collection, addDoc, onSnapshot, query, doc, updateDoc, deleteDoc, getAuth, signInAnonymously, onAuthStateChanged };
+    </script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;700&display=swap');
+        body { font-family: 'Tajawal', sans-serif; background-color: #f8fafc; }
+        .glass-card { background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(10px); }
+        input, select { outline: none; transition: all 0.2s; }
+        input:focus { ring: 2px; ring-color: #4f46e5; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // --- Icon Component Wrapper to fix Lucide Errors ---
+        const Icon = ({ name, size = 20, className = "" }) => {
+            useEffect(() => {
+                if (window.lucide) {
+                    window.lucide.createIcons();
+                }
+            }, [name]);
+            
+            return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
+        };
+
+        // --- Configuration & Structure ---
+        const BASE_TASKS = [
+            { id: 'pm', category: 'إدارة', label: 'إدارة المشروع', role: 'PM', base: 10 },
+            { id: 'sales', category: 'مبيعات', label: 'عمولة المبيعات', role: 'Sales', base: 10 },
+            { id: 'req', category: 'وظيفي', label: 'تحليل المتطلبات', role: 'Functional', base: 8 },
+            { id: 'config', category: 'وظيفي', label: 'الإعدادات الأساسية', role: 'Functional', base: 12 },
+            { id: 'data', category: 'وظيفي', label: 'ترحيل البيانات', role: 'Functional', base: 8 },
+            { id: 'reports', category: 'وظيفي', label: 'التقارير والنماذج', role: 'Functional', base: 4 },
+            { id: 'security', category: 'وظيفي', label: 'الأمان والصلاحيات', role: 'Functional', base: 4 },
+            { id: 'training', category: 'وظيفي', label: 'التدريب والدعم', role: 'Functional', base: 4 },
+            { id: 'modules', category: 'تقني', label: 'تطوير موديولات (Python)', role: 'Developer', base: 20 },
+            { id: 'integration', category: 'تقني', label: 'ربط أنظمة (Integration)', role: 'Developer', base: 20 },
+        ];
+
+        const App = () => {
+            const [projects, setProjects] = useState([]);
+            const [user, setUser] = useState(null);
+            const [isAdding, setIsAdding] = useState(false);
+            const [loading, setLoading] = useState(true);
+
+            // Form State
+            const [newProject, setNewProject] = useState({
+                name: '',
+                client: '',
+                value: 100000,
+                type: 'Custom',
+                tasks: BASE_TASKS.reduce((acc, t) => ({ ...acc, [t.id]: true }), {})
+            });
+
+            // Firebase Initialization
+            useEffect(() => {
+                const initFirebase = async () => {
+                    try {
+                        const firebaseConfigStr = window.__firebase_config || '{}';
+                        const firebaseConfig = firebaseConfigStr !== '{}' ? JSON.parse(firebaseConfigStr) : null;
+                        const appId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'odoo-manager-demo';
+                        
+                        // Fallback for demo if no config
+                        if (!firebaseConfig || !firebaseConfig.apiKey) {
+                            console.warn("Firebase config missing. Running in demo mode.");
+                            setLoading(false);
+                            return;
+                        }
+
+                        const app = fb.initializeApp(firebaseConfig);
+                        const auth = fb.getAuth(app);
+                        const db = fb.getFirestore(app);
+
+                        await fb.signInAnonymously(auth);
+                        
+                        fb.onAuthStateChanged(auth, (u) => {
+                            setUser(u);
+                            if (u) {
+                                const q = fb.collection(db, 'artifacts', appId, 'public', 'data', 'projects');
+                                fb.onSnapshot(q, (snapshot) => {
+                                    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                                    setProjects(data);
+                                    setLoading(false);
+                                }, (err) => {
+                                    console.error("Snapshot error:", err);
+                                    setLoading(false);
+                                });
+                            }
+                        });
+                    } catch (err) {
+                        console.error("Firebase Initialization Error:", err);
+                        setLoading(false);
+                    }
+                };
+                initFirebase();
+            }, []);
+
+            const calculateProjectSplit = (proj) => {
+                let tempTasks = BASE_TASKS.map(t => {
+                    let adjust = 0;
+                    if (proj.type === 'Heavy') {
+                        if (t.id === 'config') adjust = -2;
+                        if (t.id === 'data') adjust = -3;
+                        if (t.id === 'modules') adjust = 2;
+                        if (t.id === 'integration') adjust = 3;
+                    } else if (proj.type === 'Standard') {
+                        if (t.id === 'modules') adjust = -2;
+                        if (t.id === 'integration') adjust = -3;
+                        if (t.id === 'config') adjust = 2;
+                        if (t.id === 'req') adjust = 3;
+                    }
+                    
+                    const finalPerc = proj.tasks[t.id] ? (t.base + adjust) : 0;
+                    return {
+                        ...t,
+                        finalPerc,
+                        amount: (proj.value * finalPerc) / 100
+                    };
+                });
+
+                const roleTotals = tempTasks.reduce((acc, curr) => {
+                    acc[curr.role] = (acc[curr.role] || 0) + curr.amount;
+                    return acc;
+                }, { 'PM': 0, 'Sales': 0, 'Functional': 0, 'Developer': 0 });
+
+                return { tasks: tempTasks, roleTotals };
+            };
+
+            const handleSaveProject = async () => {
+                if (!newProject.name) return;
+                const appId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'odoo-manager-demo';
+                
+                try {
+                    const db = fb.getFirestore();
+                    await fb.addDoc(fb.collection(db, 'artifacts', appId, 'public', 'data', 'projects'), {
+                        ...newProject,
+                        createdAt: new Date().toISOString()
+                    });
+                    setIsAdding(false);
+                    setNewProject({ name: '', client: '', value: 100000, type: 'Custom', tasks: BASE_TASKS.reduce((acc, t) => ({ ...acc, [t.id]: true }), {}) });
+                } catch (e) {
+                    console.error("Save Error", e);
+                    // Demo mode save
+                    setProjects([...projects, { ...newProject, id: Date.now().toString() }]);
+                    setIsAdding(false);
+                }
+            };
+
+            const deleteProject = async (id) => {
+                try {
+                    const db = fb.getFirestore();
+                    const appId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'odoo-manager-demo';
+                    await fb.deleteDoc(fb.doc(db, 'artifacts', appId, 'public', 'data', 'projects', id));
+                } catch (e) {
+                    setProjects(projects.filter(p => p.id !== id));
+                }
+            };
+
+            if (loading) return (
+                <div className="flex h-screen items-center justify-center bg-indigo-900 text-white">
+                    <div className="text-center">
+                        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
+                        <p className="text-xl font-bold">جاري تحميل السيستم...</p>
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="min-h-screen flex flex-col md:flex-row bg-slate-50">
+                    {/* Sidebar */}
+                    <aside className="w-full md:w-64 bg-indigo-950 text-white p-6 shadow-xl z-20">
+                        <div className="flex items-center gap-3 mb-10">
+                            <div className="bg-white p-2 rounded-xl text-indigo-900 shadow-lg">
+                                <Icon name="settings" size={24} />
+                            </div>
+                            <h1 className="text-xl font-bold tracking-tight">Odoo OS</h1>
+                        </div>
+                        
+                        <nav className="space-y-2">
+                            <button className="flex items-center gap-3 w-full p-3 rounded-xl bg-white/10 text-white transition-all font-bold">
+                                <Icon name="layout-dashboard" size={20} />
+                                <span>لوحة التحكم</span>
+                            </button>
+                            <button className="flex items-center gap-3 w-full p-3 rounded-xl text-indigo-300 hover:bg-white/5 transition-all">
+                                <Icon name="users" size={20} />
+                                <span>الشركاء</span>
+                            </button>
+                            <button className="flex items-center gap-3 w-full p-3 rounded-xl text-indigo-300 hover:bg-white/5 transition-all">
+                                <Icon name="briefcase" size={20} />
+                                <span>العملاء</span>
+                            </button>
+                        </nav>
+
+                        <div className="mt-auto pt-10 border-t border-indigo-800 absolute bottom-6 w-52">
+                            <p className="text-[10px] text-indigo-400 font-bold uppercase mb-2">المستخدم الحالي</p>
+                            <div className="flex items-center gap-2">
+                                <div className="w-8 h-8 rounded-full bg-indigo-700 flex items-center justify-center text-xs font-bold">C</div>
+                                <p className="text-xs font-bold truncate opacity-80">{user ? user.uid.substring(0, 10) : 'مستشار أودو'}</p>
+                            </div>
+                        </div>
+                    </aside>
+
+                    {/* Main Content */}
+                    <main className="flex-1 overflow-y-auto p-4 md:p-10">
+                        <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-10">
+                            <div>
+                                <h2 className="text-3xl font-black text-slate-800">إدارة مشاريع أودو</h2>
+                                <p className="text-slate-500 font-medium mt-1">نظام حساب الأرباح وتوزيع المهام الذكي</p>
+                            </div>
+                            <button 
+                                onClick={() => setIsAdding(true)}
+                                className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-4 rounded-2xl flex items-center gap-2 shadow-xl shadow-indigo-200 transition-all active:scale-95 font-bold"
+                            >
+                                <Icon name="plus" size={20} />
+                                <span>مشروع جديد</span>
+                            </button>
+                        </header>
+
+                        {/* Stats Summary */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+                            <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100 flex items-center gap-6 group hover:shadow-lg transition-all">
+                                <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform">
+                                    <Icon name="briefcase" size={28} />
+                                </div>
+                                <div>
+                                    <p className="text-slate-400 text-xs font-bold uppercase mb-1">المشاريع</p>
+                                    <p className="text-3xl font-black text-slate-800">{projects.length}</p>
+                                </div>
+                            </div>
+                            <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100 flex items-center gap-6 group hover:shadow-lg transition-all">
+                                <div className="w-14 h-14 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform">
+                                    <Icon name="dollar-sign" size={28} />
+                                </div>
+                                <div>
+                                    <p className="text-slate-400 text-xs font-bold uppercase mb-1">قيمة التعاقدات</p>
+                                    <p className="text-3xl font-black text-emerald-600">${projects.reduce((s, p) => s + Number(p.value), 0).toLocaleString()}</p>
+                                </div>
+                            </div>
+                            <div className="bg-indigo-600 p-8 rounded-[2rem] shadow-xl text-white flex items-center gap-6 group hover:translate-y-[-4px] transition-all">
+                                <div className="w-14 h-14 bg-white/20 text-white rounded-2xl flex items-center justify-center">
+                                    <Icon name="zap" size={28} />
+                                </div>
+                                <div>
+                                    <p className="text-indigo-200 text-xs font-bold uppercase mb-1">المشاريع النشطة</p>
+                                    <p className="text-3xl font-black">{projects.length}</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Project List */}
+                        <div className="space-y-6">
+                            <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                                <Icon name="layout-dashboard" size={22} className="text-indigo-600" />
+                                قائمة المشاريع الحالية
+                            </h3>
+                            {projects.length === 0 && (
+                                <div className="bg-white border-2 border-dashed border-slate-200 p-20 rounded-[2.5rem] text-center">
+                                    <Icon name="alert-circle" size={48} className="mx-auto text-slate-300 mb-4" />
+                                    <p className="text-slate-400 font-bold">لا توجد مشاريع مضافة حالياً. ابدأ بإضافة أول مشروع!</p>
+                                </div>
+                            )}
+                            <div className="grid grid-cols-1 gap-6">
+                                {projects.map(proj => {
+                                    const analysis = calculateProjectSplit(proj);
+                                    return (
+                                        <div key={proj.id} className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden hover:shadow-xl transition-all group">
+                                            <div className="p-8 md:p-10 flex flex-col md:flex-row gap-8">
+                                                <div className="flex-1">
+                                                    <div className="flex items-center gap-4 mb-4">
+                                                        <span className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest ${
+                                                            proj.type === 'Heavy' ? 'bg-orange-100 text-orange-600' : 
+                                                            proj.type === 'Standard' ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-600'
+                                                        }`}>{proj.type} Project</span>
+                                                        <h3 className="text-2xl font-black text-slate-800">{proj.name}</h3>
+                                                    </div>
+                                                    <p className="text-slate-400 font-bold text-sm mb-8 flex items-center gap-2 italic">
+                                                        <Icon name="users" size={16} /> العميل: {proj.client}
+                                                    </p>
+                                                    
+                                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+                                                        <div className="bg-indigo-50/50 p-5 rounded-3xl border border-indigo-100">
+                                                            <span className="block text-[10px] text-indigo-400 font-black uppercase mb-2">المطور (أنت)</span>
+                                                            <span className="text-xl font-black text-indigo-900">${analysis.roleTotals['Developer']?.toLocaleString()}</span>
+                                                        </div>
+                                                        <div className="bg-slate-50 p-5 rounded-3xl border border-slate-100">
+                                                            <span className="block text-[10px] text-slate-400 font-black uppercase mb-2">فريق التنفيذ</span>
+                                                            <span className="text-xl font-black text-slate-800">${analysis.roleTotals['Functional']?.toLocaleString()}</span>
+                                                        </div>
+                                                        <div className="bg-slate-50 p-5 rounded-3xl border border-slate-100">
+                                                            <span className="block text-[10px] text-slate-400 font-black uppercase mb-2">مبيعات وإدارة</span>
+                                                            <span className="text-xl font-black text-slate-800">${(analysis.roleTotals['PM'] + analysis.roleTotals['Sales'])?.toLocaleString()}</span>
+                                                        </div>
+                                                        <div className="bg-emerald-50 p-5 rounded-3xl border border-emerald-100">
+                                                            <span className="block text-[10px] text-emerald-600/60 font-black uppercase mb-2">إجمالي العقد</span>
+                                                            <span className="text-xl font-black text-emerald-700">${Number(proj.value).toLocaleString()}</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                
+                                                <div className="flex flex-row md:flex-col justify-center items-center gap-4 md:border-r md:pr-10 border-slate-100">
+                                                    <button className="p-4 bg-slate-50 text-slate-400 hover:bg-indigo-50 hover:text-indigo-600 rounded-2xl transition-all">
+                                                        <Icon name="settings" size={24} />
+                                                    </button>
+                                                    <button 
+                                                        onClick={() => deleteProject(proj.id)}
+                                                        className="p-4 bg-red-50 text-red-400 hover:bg-red-100 hover:text-red-600 rounded-2xl transition-all"
+                                                    >
+                                                        <Icon name="trash-2" size={24} />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </main>
+
+                    {/* New Project Modal */}
+                    {isAdding && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4">
+                            <div className="bg-white w-full max-w-5xl rounded-[3rem] shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-300">
+                                <div className="p-8 md:p-14 overflow-y-auto max-h-[90vh]">
+                                    <div className="flex justify-between items-center mb-10">
+                                        <div>
+                                            <h2 className="text-3xl font-black text-slate-800">إضافة مشروع جديد</h2>
+                                            <p className="text-slate-400 mt-1 font-bold italic text-sm">أدخل تفاصيل المشروع لتوليد تقسيم الأرباح تلقائياً</p>
+                                        </div>
+                                        <button onClick={() => setIsAdding(false)} className="text-slate-300 hover:text-slate-800 transition-colors">
+                                            <Icon name="chevron-left" size={40} />
+                                        </button>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 text-right">
+                                        <div className="space-y-8">
+                                            <div className="group">
+                                                <label className="block text-[10px] font-black text-slate-400 uppercase mb-3 tracking-widest">اسم المشروع</label>
+                                                <input 
+                                                    type="text" 
+                                                    placeholder="مثلاً: تطبيق أودو لشركة الغانم"
+                                                    value={newProject.name}
+                                                    onChange={(e) => setNewProject({...newProject, name: e.target.value})}
+                                                    className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-500 focus:bg-white rounded-3xl p-5 text-lg font-bold transition-all"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[10px] font-black text-slate-400 uppercase mb-3 tracking-widest">اسم العميل</label>
+                                                <input 
+                                                    type="text" 
+                                                    placeholder="شركة فلان للتجارة"
+                                                    value={newProject.client}
+                                                    onChange={(e) => setNewProject({...newProject, client: e.target.value})}
+                                                    className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-500 focus:bg-white rounded-3xl p-5 font-bold"
+                                                />
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-6">
+                                                <div>
+                                                    <label className="block text-[10px] font-black text-slate-400 uppercase mb-3 tracking-widest">قيمة المشروع ($)</label>
+                                                    <div className="relative">
+                                                        <span className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 font-bold">$</span>
+                                                        <input 
+                                                            type="number" 
+                                                            value={newProject.value}
+                                                            onChange={(e) => setNewProject({...newProject, value: Number(e.target.value)})}
+                                                            className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-500 focus:bg-white rounded-3xl p-5 pl-10 font-black text-xl"
+                                                        />
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-[10px] font-black text-slate-400 uppercase mb-3 tracking-widest">نوع المشروع</label>
+                                                    <select 
+                                                        value={newProject.type}
+                                                        onChange={(e) => setNewProject({...newProject, type: e.target.value})}
+                                                        className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-500 focus:bg-white rounded-3xl p-5 font-bold cursor-pointer"
+                                                    >
+                                                        <option value="Standard">Standard (بسيط)</option>
+                                                        <option value="Custom">Custom (متوسط)</option>
+                                                        <option value="Heavy">Heavy (معقد/ربط)</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="bg-slate-50 p-8 rounded-[2.5rem] border border-slate-100">
+                                            <div className="flex justify-between items-center mb-6">
+                                                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">قائمة المهام المتاحة</label>
+                                                <span className="text-[10px] bg-indigo-100 text-indigo-600 px-3 py-1 rounded-full font-black">النموذج الذكي</span>
+                                            </div>
+                                            <div className="space-y-3 max-h-[20rem] overflow-y-auto pr-2 custom-scrollbar">
+                                                {BASE_TASKS.map(t => (
+                                                    <label key={t.id} className="flex items-center gap-4 p-4 bg-white rounded-2xl border border-slate-100 cursor-pointer hover:border-indigo-300 transition-all group">
+                                                        <input 
+                                                            type="checkbox" 
+                                                            checked={newProject.tasks[t.id]}
+                                                            onChange={() => setNewProject({
+                                                                ...newProject, 
+                                                                tasks: {...newProject.tasks, [t.id]: !newProject.tasks[t.id]}
+                                                            })}
+                                                            className="w-6 h-6 text-indigo-600 rounded-lg cursor-pointer"
+                                                        />
+                                                        <div className="flex-1">
+                                                            <span className="block text-sm font-black text-slate-700">{t.label}</span>
+                                                            <span className="text-[10px] text-slate-400 font-bold">{t.category}</span>
+                                                        </div>
+                                                        <span className={`text-[10px] px-3 py-1 rounded-lg font-black uppercase ${
+                                                            t.role === 'Developer' ? 'bg-purple-50 text-purple-600' : 
+                                                            t.role === 'Functional' ? 'bg-blue-50 text-blue-600' : 'bg-slate-100 text-slate-400'
+                                                        }`}>{t.role}</span>
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="mt-12 flex flex-col md:flex-row gap-4">
+                                        <button 
+                                            onClick={handleSaveProject}
+                                            className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-black py-5 rounded-[2rem] shadow-2xl shadow-indigo-200 transition-all flex items-center justify-center gap-3 active:scale-95"
+                                        >
+                                            <Icon name="save" size={24} />
+                                            <span>حفظ المشروع وتوليد التوزيع</span>
+                                        </button>
+                                        <button 
+                                            onClick={() => setIsAdding(false)}
+                                            className="px-10 bg-slate-100 text-slate-400 font-bold py-5 rounded-[2rem] hover:bg-slate-200 transition-all active:scale-95"
+                                        >
+                                            إلغاء العملية
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
