@@ -60,9 +60,13 @@
             { id: 'integration', category: 'تقني', label: 'ربط أنظمة (Integration)', role: 'Developer', base: 20 },
         ];
 
-        // User Provided Firebase Config
+        /**
+         * تنبيه أمني: لا تضع مفتاح API حقيقي هنا في مستودع عام (Public Repository).
+         * قم بتجديد المفتاح من Firebase Console واستخدم الخصائص أدناه.
+         * يفضل استخدام إعدادات القيود (Restrictions) للمفتاح ليقتصر استخدامه على نطاق موقعك فقط.
+         */
         const USER_FIREBASE_CONFIG = {
-            apiKey: "AIzaSyBlMipsBbHrzR3tt6RuMqaCJwaBw-RW2Q0",
+            apiKey: "", // ضع المفتاح الجديد هنا بعد التجديد
             authDomain: "odoo-manager-50db5.firebaseapp.com",
             projectId: "odoo-manager-50db5",
             storageBucket: "odoo-manager-50db5.firebasestorage.app",
@@ -76,6 +80,7 @@
             const [user, setUser] = useState(null);
             const [isAdding, setIsAdding] = useState(false);
             const [loading, setLoading] = useState(true);
+            const [setupError, setSetupError] = useState(null);
 
             // Form State
             const [newProject, setNewProject] = useState({
@@ -90,10 +95,20 @@
             useEffect(() => {
                 const initFirebase = async () => {
                     try {
-                        const envConfig = typeof window.__firebase_config !== 'undefined' ? JSON.parse(window.__firebase_config) : null;
-                        const firebaseConfig = envConfig && envConfig.apiKey ? envConfig : USER_FIREBASE_CONFIG;
+                        const envConfigStr = typeof window.__firebase_config !== 'undefined' ? window.__firebase_config : null;
+                        const envConfig = envConfigStr ? JSON.parse(envConfigStr) : null;
+                        
+                        // اختيار الإعدادات المتاحة
+                        const firebaseConfig = (envConfig && envConfig.apiKey) ? envConfig : USER_FIREBASE_CONFIG;
                         const appId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'odoo-manager-default';
                         
+                        // فحص إذا كان المفتاح مفقوداً
+                        if (!firebaseConfig.apiKey) {
+                            setSetupError("يرجى وضع مفتاح API الجديد في ملف الكود index.html لتفعيل ميزات السحابة.");
+                            setLoading(false);
+                            return;
+                        }
+
                         const app = fb.initializeApp(firebaseConfig);
                         const auth = fb.getAuth(app);
                         const db = fb.getFirestore(app);
@@ -109,7 +124,6 @@
                         fb.onAuthStateChanged(auth, (u) => {
                             setUser(u);
                             if (u) {
-                                // Follow RULE 1 for paths
                                 const q = fb.collection(db, 'artifacts', appId, 'public', 'data', 'projects');
                                 fb.onSnapshot(q, (snapshot) => {
                                     const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -124,6 +138,7 @@
                     } catch (err) {
                         console.error("Firebase Initialization Error:", err);
                         setLoading(false);
+                        setSetupError("خطأ في الاتصال بخدمات السحابة. تأكد من صحة إعدادات Firebase.");
                     }
                 };
                 initFirebase();
@@ -198,6 +213,24 @@
                 </div>
             );
 
+            if (setupError) return (
+                <div className="flex h-screen items-center justify-center bg-slate-50 p-6">
+                    <div className="max-w-md w-full bg-white p-8 rounded-[2.5rem] shadow-2xl border border-red-100 text-center">
+                        <div className="w-20 h-20 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-6">
+                            <Icon name="alert-circle" size={40} />
+                        </div>
+                        <h2 className="text-2xl font-black text-slate-800 mb-4">تنبيه أمني وإعدادات</h2>
+                        <p className="text-slate-500 mb-8 leading-relaxed font-bold">{setupError}</p>
+                        <div className="bg-slate-50 p-4 rounded-2xl text-right text-xs text-slate-400 space-y-2 mb-6">
+                            <p>1. اذهب لـ Firebase Console.</p>
+                            <p>2. قم بتجديد (Regenerate) مفتاح الـ API.</p>
+                            <p>3. ضعه في متغير USER_FIREBASE_CONFIG داخل الكود.</p>
+                        </div>
+                        <button onClick={() => window.location.reload()} className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold hover:bg-indigo-700 transition-all">إعادة تحميل النظام</button>
+                    </div>
+                </div>
+            );
+
             return (
                 <div className="min-h-screen flex flex-col md:flex-row bg-slate-50">
                     {/* Sidebar */}
@@ -228,9 +261,9 @@
                             <p className="text-[10px] text-indigo-400 font-bold uppercase mb-2 tracking-widest">المستشار الحالي</p>
                             <div className="flex items-center gap-3 p-2 bg-indigo-900/50 rounded-xl border border-indigo-800">
                                 <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-xs font-bold text-white">O</div>
-                                <div className="overflow-hidden">
-                                    <p className="text-[10px] font-bold truncate text-indigo-100">{user ? user.uid : 'مستشار مجهول'}</p>
-                                    <p className="text-[8px] text-indigo-400 font-bold">متصل بالسحابة</p>
+                                <div className="overflow-hidden text-right">
+                                    <p className="text-[10px] font-bold truncate text-indigo-100">{user ? user.uid.substring(0, 15) : 'مستشار مجهول'}</p>
+                                    <p className="text-[8px] text-indigo-400 font-bold uppercase">Cloud Connected</p>
                                 </div>
                             </div>
                         </div>
@@ -255,29 +288,29 @@
                         {/* Stats Summary */}
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
                             <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex items-center gap-6 group hover:shadow-lg transition-all border-b-4 border-b-indigo-500">
-                                <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform shadow-inner">
+                                <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform shadow-inner text-right">
                                     <Icon name="briefcase" size={28} />
                                 </div>
-                                <div>
+                                <div className="text-right">
                                     <p className="text-slate-400 text-xs font-bold uppercase mb-1 tracking-wider">المشاريع</p>
                                     <p className="text-3xl font-black text-slate-800 tracking-tighter">{projects.length}</p>
                                 </div>
                             </div>
                             <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex items-center gap-6 group hover:shadow-lg transition-all border-b-4 border-b-emerald-500">
-                                <div className="w-14 h-14 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform shadow-inner">
+                                <div className="w-14 h-14 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform shadow-inner text-right">
                                     <Icon name="dollar-sign" size={28} />
                                 </div>
-                                <div>
+                                <div className="text-right">
                                     <p className="text-slate-400 text-xs font-bold uppercase mb-1 tracking-wider">قيمة التعاقدات</p>
                                     <p className="text-3xl font-black text-emerald-600 tracking-tighter">${projects.reduce((s, p) => s + Number(p.value), 0).toLocaleString()}</p>
                                 </div>
                             </div>
                             <div className="bg-indigo-600 p-8 rounded-[2.5rem] shadow-xl text-white flex items-center gap-6 group hover:translate-y-[-4px] transition-all relative overflow-hidden">
                                 <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16"></div>
-                                <div className="w-14 h-14 bg-white/20 text-white rounded-2xl flex items-center justify-center z-10">
+                                <div className="w-14 h-14 bg-white/20 text-white rounded-2xl flex items-center justify-center z-10 text-right">
                                     <Icon name="zap" size={28} />
                                 </div>
-                                <div className="z-10">
+                                <div className="z-10 text-right">
                                     <p className="text-indigo-200 text-xs font-bold uppercase mb-1 tracking-wider">المشاريع النشطة</p>
                                     <p className="text-3xl font-black tracking-tighter">{projects.length}</p>
                                 </div>
@@ -291,7 +324,7 @@
                                     <Icon name="layout-dashboard" size={22} className="text-indigo-600" />
                                     المشاريع الحالية بالسحابة
                                 </h3>
-                                <span className="text-[10px] bg-slate-200 text-slate-600 px-3 py-1 rounded-full font-black uppercase">Live Database</span>
+                                <span className="text-[10px] bg-emerald-100 text-emerald-600 px-3 py-1 rounded-full font-black uppercase">Live DB Connected</span>
                             </div>
                             
                             {projects.length === 0 && (
@@ -300,7 +333,7 @@
                                         <Icon name="alert-circle" size={40} className="text-slate-300" />
                                     </div>
                                     <p className="text-slate-400 font-bold text-lg">لا توجد مشاريع مسجلة في قاعدة البيانات حالياً.</p>
-                                    <p className="text-slate-300 text-sm mt-2">ابدأ بإضافة أول مشروع لمشاركته مع الفريق.</p>
+                                    <p className="text-slate-300 text-sm mt-2 font-bold italic">ابدأ بإضافة أول مشروع لمشاركته مع الفريق.</p>
                                 </div>
                             )}
 
@@ -308,7 +341,7 @@
                                 {projects.map(proj => {
                                     const analysis = calculateProjectSplit(proj);
                                     return (
-                                        <div key={proj.id} className="bg-white rounded-[3rem] shadow-sm border border-slate-100 overflow-hidden hover:shadow-2xl transition-all group relative border-r-8 border-r-indigo-500">
+                                        <div key={proj.id} className="bg-white rounded-[3rem] shadow-sm border border-slate-100 overflow-hidden hover:shadow-2xl transition-all group relative border-r-8 border-r-indigo-500 text-right">
                                             <div className="p-8 md:p-12 flex flex-col md:flex-row gap-8">
                                                 <div className="flex-1">
                                                     <div className="flex items-center gap-4 mb-4">
@@ -365,7 +398,7 @@
                     {/* New Project Modal */}
                     {isAdding && (
                         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xl z-50 flex items-center justify-center p-4 overflow-y-auto">
-                            <div className="bg-white w-full max-w-5xl rounded-[3.5rem] shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-300 my-auto">
+                            <div className="bg-white w-full max-w-5xl rounded-[3.5rem] shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-300 my-auto text-right">
                                 <div className="p-8 md:p-16 max-h-[90vh] overflow-y-auto custom-scrollbar">
                                     <div className="flex justify-between items-center mb-12">
                                         <div>
@@ -377,7 +410,7 @@
                                         </button>
                                     </div>
 
-                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 text-right">
+                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-16">
                                         <div className="space-y-10">
                                             <div className="group">
                                                 <label className="block text-[10px] font-black text-slate-400 uppercase mb-4 tracking-widest">اسم المشروع بالكامل</label>
@@ -386,7 +419,7 @@
                                                     placeholder="مثلاً: تطبيق أودو لمجموعة الشايع"
                                                     value={newProject.name}
                                                     onChange={(e) => setNewProject({...newProject, name: e.target.value})}
-                                                    className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-500 focus:bg-white rounded-[2rem] p-6 text-xl font-bold transition-all shadow-inner"
+                                                    className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-500 focus:bg-white rounded-[2rem] p-6 text-xl font-bold transition-all shadow-inner text-right"
                                                 />
                                             </div>
                                             <div>
@@ -396,7 +429,7 @@
                                                     placeholder="الشركة القابضة..."
                                                     value={newProject.client}
                                                     onChange={(e) => setNewProject({...newProject, client: e.target.value})}
-                                                    className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-500 focus:bg-white rounded-[2rem] p-6 font-bold shadow-inner"
+                                                    className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-500 focus:bg-white rounded-[2rem] p-6 font-bold shadow-inner text-right"
                                                 />
                                             </div>
                                             <div className="grid grid-cols-2 gap-8">
@@ -408,7 +441,7 @@
                                                             type="number" 
                                                             value={newProject.value}
                                                             onChange={(e) => setNewProject({...newProject, value: Number(e.target.value)})}
-                                                            className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-500 focus:bg-white rounded-[2rem] p-6 pl-12 font-black text-2xl shadow-inner text-indigo-600"
+                                                            className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-500 focus:bg-white rounded-[2rem] p-6 pl-12 font-black text-2xl shadow-inner text-indigo-600 text-right"
                                                         />
                                                     </div>
                                                 </div>
@@ -417,7 +450,7 @@
                                                     <select 
                                                         value={newProject.type}
                                                         onChange={(e) => setNewProject({...newProject, type: e.target.value})}
-                                                        className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-500 focus:bg-white rounded-[2rem] p-6 font-bold cursor-pointer shadow-inner appearance-none"
+                                                        className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-500 focus:bg-white rounded-[2rem] p-6 font-bold cursor-pointer shadow-inner appearance-none text-right"
                                                     >
                                                         <option value="Standard">Standard (تجهيز)</option>
                                                         <option value="Custom">Custom (متوازن)</option>
@@ -432,7 +465,7 @@
                                                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">نطاق العمل (SOW)</label>
                                                 <span className="text-[10px] bg-indigo-600 text-white px-4 py-1.5 rounded-full font-black shadow-lg shadow-indigo-200">النموذج الذكي</span>
                                             </div>
-                                            <div className="space-y-4 max-h-[22rem] overflow-y-auto pr-3 custom-scrollbar">
+                                            <div className="space-y-4 max-h-[22rem] overflow-y-auto pr-3 custom-scrollbar text-right">
                                                 {BASE_TASKS.map(t => (
                                                     <label key={t.id} className="flex items-center gap-5 p-5 bg-white rounded-[1.5rem] border border-slate-100 cursor-pointer hover:border-indigo-400 transition-all group shadow-sm hover:shadow-md">
                                                         <input 
